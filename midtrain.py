@@ -4,13 +4,11 @@ import argparse
 from utils import TLDRDataset
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from tqdm import tqdm
-import time
+import wandb
 
-def train(args, model, tokenizer, device, train_loader, optimizer, epoch):
+def train(args, model, tokenizer, device, train_loader, test_loader, optimizer):
 
     criterion = torch.nn.CrossEntropyLoss()
-
-    start_time = time.time()
 
     model.train()
     model.zero_grad()
@@ -39,7 +37,7 @@ def train(args, model, tokenizer, device, train_loader, optimizer, epoch):
         loss /= args.accumulation_steps
         loss.backward()
         # Gradient accumulation logic
-        if (i+1) % args.accumulation_steps == 0: 
+        if (batch_idx+1) % args.accumulation_steps == 0: 
             optimizer.step()
             model.zero_grad()     
             pbar.set_description(f'train loss: {loss.detach().cpu().item()}')
@@ -47,12 +45,40 @@ def train(args, model, tokenizer, device, train_loader, optimizer, epoch):
             if args.dry_run:
                 break
 
-            if (i+1) % evaluation_steps == 0:           # Evaluate the model when we...
-                test()            
+            wandb.log({"train_loss": loss.detach().cpu().item()})    
+            
+        #run number of test phases per train epoch
+        if (batch_idx+1) % (len(train_loader) // args.test_phases) == 0:
+            test(args, model, tokenizer, device, test_loader)           
 
-def test(args, model, tokenizer, device, test_loader, epoch):
+def test(args, model, tokenizer, device, test_loader):
+
+    criterion = torch.nn.CrossEntropyLoss()
+
     model.eval()
-    pass
+
+    for batch_idx, (text, summary_length) in enumerate(test_loader):
+
+        inputs = tokenizer(text, padding=True, truncation=True, return_length = True, max_length = 512, return_tensors = 'pt').to(device)
+        total_length = inputs.pop('length')
+
+        with torch.no_grad():
+            lm_logits = model(**inputs)['logits']
+
+        # Shift so that tokens < n predict n
+        shift_logits = lm_logits[..., :-1, :].contiguous()
+        shift_labels = inputs['input_ids'][..., 1:].contiguous()
+        # Create mask for only end tokens
+        mask = torch.zeros_like(shift_labels, dtype=torch.bool)
+        for i, (s, t) in enumerate(zip(summary_length, total_length)):
+                mask[i][t - s - 1 : t - 1] = True 
+        # Flatten the tokens
+        shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+        shift_labels = shift_labels.view(-1)
+        mask = mask.view(-1)
+        # Calculate loss for summary only
+        loss = criterion(shift_logits[mask], shift_labels[mask])
+        wandb.log({"test_loss": loss.detach().cpu().item()})
 
 def main():
 
@@ -68,11 +94,14 @@ def main():
     parser.add_argument('--accumulation-steps', type=int, default=1,
                         help='number of gradient accumulation steps')
 
-    parser.add_argument('--batch-size', type=int, default=4, metavar='N',
-                        help='input batch size for training (default: 64)')
+    parser.add_argument('--test-phases', type=int, default=4,
+                        help='number of test phases per train epoch (default: 4)')
 
-    parser.add_argument('--test-batch-size', type=int, default=64, metavar='N',
-                        help='input batch size for testing (default: 64)')
+    parser.add_argument('--batch-size', type=int, default=4, metavar='N',
+                        help='input batch size for training (default: 4)')
+
+    parser.add_argument('--test-batch-size', type=int, default=4, metavar='N',
+                        help='input batch size for testing (default: 4)')
                         
     parser.add_argument('--epochs', type=int, default=5, metavar='N',
                         help='number of epochs to train (default: 5)')
@@ -103,15 +132,13 @@ def main():
     tokenizer = GPT2Tokenizer.from_pretrained(args.model)
     tokenizer.pad_token = tokenizer.eos_token
 
-
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    train_kwargs = {'batch_size': args.batch_size}
-    test_kwargs = {'batch_size': args.test_batch_size}
+    train_kwargs = {'batch_size': args.batch_size, 'shuffle': True}
+    test_kwargs = {'batch_size': args.test_batch_size, 'shuffle': False}
     if use_cuda:
         cuda_kwargs = {'num_workers': 1,
-                       'pin_memory': True,
-                       'shuffle': True}
+                       'pin_memory': True}
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
@@ -125,15 +152,19 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    if not args.dry_run:
+        wandb.init('World-Pointer-Summarization')
+        wandb.config.batch_size = args.batch_size
+        wandb.config.learning_rate = args.lr
+        wandb.config.seed = args.seed
+        wandb.config.model = args.model
+
     for epoch in range(1, args.epochs + 1):
-        train(args, model, tokenizer, device, train_loader, optimizer, epoch)
-        test(args, model, tokenizer, device, test_loader, epoch)
+        train(args, model, tokenizer, device, train_loader, test_loader, optimizer)
 
         if args.dry_run:
             print('finished dry run')
             break
-
-
 
 if __name__ == '__main__':
     main()
