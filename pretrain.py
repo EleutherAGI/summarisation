@@ -48,7 +48,7 @@ def train(args, model, tokenizer, device, train_loader, optimizer, epoch):
                 break
 
             if (i+1) % evaluation_steps == 0:           # Evaluate the model when we...
-                test            
+                test()            
 
 def test(args, model, tokenizer, device, test_loader, epoch):
     model.eval()
@@ -60,7 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description='Fine-Tune causal language model')
 
     parser.add_argument('--model', type=str, default='distilgpt2',
-                        help='model type to train (default: gpt2)')
+                        help='model type to train (default: distilgpt2)')
 
     parser.add_argument('--data', type=str, default='data/',
                         help='storage location of tldr data')
