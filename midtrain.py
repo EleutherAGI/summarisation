@@ -6,9 +6,34 @@ from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from tqdm import tqdm
 import wandb
 
-def train(args, model, tokenizer, device, train_loader, test_loader, optimizer):
+class ModelWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super(ModelWrapper, self).__init__()
+        self.model = transformers.GPT2LMHeadModel.from_pretrained(model)
+        self.criterion = torch.nn.CrossEntropyLoss()
 
-    criterion = torch.nn.CrossEntropyLoss()
+    def forward(self, input_ids, attention_mask, length, summary_length):
+
+        lm_logits = self.model(input_ids = input_ids, 
+                          attention_mask = attention_mask)['logits']
+
+        # Shift so that tokens < n predict n
+        shift_logits = lm_logits[..., :-1, :].contiguous()
+        shift_labels = input_ids[..., 1:].contiguous()
+        # Create mask for only end tokens
+        mask = torch.zeros_like(shift_labels, dtype=torch.bool)
+        for i, (s, t) in enumerate(zip(summary_length, length)):
+                mask[i][t - s - 1 : t - 1] = True 
+        # Flatten the tokens
+        shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+        shift_labels = shift_labels.view(-1)
+        mask = mask.view(-1)
+        # Calculate loss for summary only
+        return self.criterion(shift_logits[mask], shift_labels[mask])
+
+
+
+def train(args, model, tokenizer, device, train_loader, test_loader, optimizer):
 
     model.train()
     model.zero_grad()
@@ -18,34 +43,22 @@ def train(args, model, tokenizer, device, train_loader, test_loader, optimizer):
     for batch_idx, (text, summary_length) in enumerate(pbar):
 
         inputs = tokenizer(text, padding=True, truncation=True, return_length = True, max_length = 512, return_tensors = 'pt').to(device)
-        total_length = inputs.pop('length')
 
-        lm_logits = model(**inputs)['logits']
-        # Shift so that tokens < n predict n
-        shift_logits = lm_logits[..., :-1, :].contiguous()
-        shift_labels = inputs['input_ids'][..., 1:].contiguous()
-        # Create mask for only end tokens
-        mask = torch.zeros_like(shift_labels, dtype=torch.bool)
-        for i, (s, t) in enumerate(zip(summary_length, total_length)):
-                mask[i][t - s - 1 : t - 1] = True 
-        # Flatten the tokens
-        shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-        shift_labels = shift_labels.view(-1)
-        mask = mask.view(-1)
-        # Calculate loss for summary only
-        loss = criterion(shift_logits[mask], shift_labels[mask])
+        loss = model(**inputs, summary_length = summary_length).mean()
+
         loss /= args.accumulation_steps
         loss.backward()
         # Gradient accumulation logic
         if (batch_idx+1) % args.accumulation_steps == 0: 
             optimizer.step()
             model.zero_grad()     
-            pbar.set_description(f'train loss: {loss.detach().cpu().item()}')
+
+            pbar.set_description(f'train loss: {(loss*args.accumulation_steps).detach().cpu().item()}')
 
             if args.dry_run:
                 break
 
-            wandb.log({"train_loss": loss.detach().cpu().item()})    
+            wandb.log({"train_loss": (loss*args.accumulation_steps).detach().cpu().item()})    
             
         #run number of test phases per train epoch
         if (batch_idx+1) % (len(train_loader) // args.test_phases) == 0:
@@ -53,31 +66,15 @@ def train(args, model, tokenizer, device, train_loader, test_loader, optimizer):
 
 def test(args, model, tokenizer, device, test_loader):
 
-    criterion = torch.nn.CrossEntropyLoss()
-
     model.eval()
 
     for batch_idx, (text, summary_length) in enumerate(test_loader):
 
         inputs = tokenizer(text, padding=True, truncation=True, return_length = True, max_length = 512, return_tensors = 'pt').to(device)
-        total_length = inputs.pop('length')
 
         with torch.no_grad():
-            lm_logits = model(**inputs)['logits']
+            loss = model(**inputs, summary_length = summary_length).mean()
 
-        # Shift so that tokens < n predict n
-        shift_logits = lm_logits[..., :-1, :].contiguous()
-        shift_labels = inputs['input_ids'][..., 1:].contiguous()
-        # Create mask for only end tokens
-        mask = torch.zeros_like(shift_labels, dtype=torch.bool)
-        for i, (s, t) in enumerate(zip(summary_length, total_length)):
-                mask[i][t - s - 1 : t - 1] = True 
-        # Flatten the tokens
-        shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-        shift_labels = shift_labels.view(-1)
-        mask = mask.view(-1)
-        # Calculate loss for summary only
-        loss = criterion(shift_logits[mask], shift_labels[mask])
         wandb.log({"test_loss": loss.detach().cpu().item()})
 
 def main():
@@ -148,7 +145,11 @@ def main():
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
-    model = transformers.GPT2LMHeadModel.from_pretrained(args.model).to(device)
+    model = ModelWrapper(args.model).to(device)
+    if torch.cuda.device_count() > 1:
+        print("running on", torch.cuda.device_count(), "GPUs")
+        model = torch.nn.DataParallel(model)
+    model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
