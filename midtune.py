@@ -405,7 +405,7 @@ def main():
             
             inputs["labels"] = inputs["input_ids"].clone()
 
-            print(inputs["labels"].shape)
+            #print(inputs["labels"].shape)
 
             outputs = model(**inputs)
             loss = outputs['loss']
