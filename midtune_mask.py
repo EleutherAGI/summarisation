@@ -46,6 +46,12 @@ from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
 
+# Imports for custom dataCollators
+import torch
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers.file_utils import PaddingStrategy
+from typing import Any, Callable, Dict, List, NewType, Optional, Tuple, Union
+
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.6.0.dev0")
@@ -324,15 +330,8 @@ def main():
         with CaptureLogger(tok_logger) as cl:
             text = [content + ' TLDR:' + summary for content, summary in zip(examples['content'], examples['summary'])]
             output = tokenizer(text, return_length = True)
-            
-            summary_lengths = tokenizer(examples['summary'], return_length = True)['length']
-            total_lengths = output.pop("length")
-            # for item in tokenize batch
-            output['mask'] = []
-            for i in range(len(summary_lengths)):
-                output['mask'].append([False for _ in range(total_lengths[i])])
-                for j in range(total_lengths[i] - summary_lengths[i], total_lengths[i]):
-                    output['mask'][i][j] = True
+            output["total_length"] = output.pop("length")
+            output["summary_length"] = tokenizer(examples['summary'], return_length = True)['length']
         # clm input could be much much longer than block_size
         if "Token indices sequence length is longer than the" in cl.out:
             tok_logger.warning(
@@ -408,18 +407,55 @@ def main():
         if data_args.max_val_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 
+    @dataclass
+    class DataCollatorWithPaddingAndMask:
+        tokenizer: PreTrainedTokenizerBase
+        padding: Union[bool, str, PaddingStrategy] = True
+        max_length: Optional[int] = None
+        pad_to_multiple_of: Optional[int] = None
+
+        def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+
+            total_length = features.pop('total_length')
+            summary_length = features.pop('summary_length')
+
+            batch = self.tokenizer.pad(
+                features,
+                padding=self.padding,
+                max_length=self.max_length,
+                pad_to_multiple_of=self.pad_to_multiple_of,
+                return_tensors="pt",
+            )
+
+            #Suspecting batch = (size, max_len)
+            print(batch.shape)
+            mask = torch.full_like(features['attention_mask'], False)
+            for idx, (t, s) in enumerate(zip(total_length, summary_length)):
+                mask[i][t-s:t] = True
+            batch['mask'] = mask
+
+            if "label" in batch:
+                batch["labels"] = batch["label"]
+                del batch["label"]
+            if "label_ids" in batch:
+                batch["labels"] = batch["label_ids"]
+                del batch["label_ids"]
+            return batch
+
+
+
     class MaskedTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False):
-            mask = inputs.pop("mask")
+            #mask = inputs.pop("mask")
             outputs = model(**inputs)
             logits = outputs.logits
             loss_fct = torch.nn.CrossEntropyLoss()
 
-            shift_logits = lm_logits[..., :-1, :].contiguous().view(-1, shift_logits.size(-1))
+            shift_logits = logits[..., :-1, :].contiguous().view(-1, logits.size(-1))
             shift_labels = inputs['input_ids'][..., 1:].contiguous().view(-1)
-            shift_mask = mask[..., 1:].contiguous().view(-1)
+            #shift_mask = mask[..., 1:].contiguous().view(-1)
 
-            loss = loss_fct(shift_logits[mask], shift_labels[mask])
+            loss = loss_fct(shift_logits, shift_labels)
 
             return (loss, outputs) if return_outputs else loss
 
@@ -431,7 +467,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
-        #data_collator=default_data_collator,
+        data_collator=DataCollatorWithPaddingAndMask,
     )
 
     # Training
