@@ -456,10 +456,6 @@ def main():
             shift_labels = inputs['input_ids'][..., 1:].contiguous().view(-1)
             shift_mask = mask[..., 1:].contiguous().view(-1)
 
-            
-            tokenizer = AutoTokenizer.from_pretrained('gpt2', **tokenizer_kwargs)
-            print(tokenizer.decode(shift_labels[shift_mask]))
-
             loss = loss_fct(shift_logits[shift_mask], shift_labels[shift_mask])
 
             return (loss, outputs) if return_outputs else loss
