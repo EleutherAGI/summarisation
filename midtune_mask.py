@@ -51,6 +51,7 @@ import torch
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.file_utils import PaddingStrategy
 from typing import Any, Callable, Dict, List, NewType, Optional, Tuple, Union
+from transformers.data.data_collator import DataCollatorWithPadding
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -330,7 +331,7 @@ def main():
         with CaptureLogger(tok_logger) as cl:
             text = [content + ' TLDR:' + summary for content, summary in zip(examples['content'], examples['summary'])]
             output = tokenizer(text, return_length = True)
-            output["total_length"] = output.pop("length")
+            #output["total_length"] = output.pop("length")
             output["summary_length"] = tokenizer(examples['summary'], return_length = True)['length']
         # clm input could be much much longer than block_size
         if "Token indices sequence length is longer than the" in cl.out:
@@ -415,9 +416,11 @@ def main():
         pad_to_multiple_of: Optional[int] = None
 
         def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+            #TODO The following columns in the evaluation set  don't have a corresponding argument in `GPT2LMHeadModel.forward` and have been ignored: summary_length, length.
+            print(features)
 
-            total_length = features.pop('total_length')
-            summary_length = features.pop('summary_length')
+            total_length = [feature.pop('total_length') for feature in features]
+            summary_length = [feature.pop('summary_length') for feature in features]
 
             batch = self.tokenizer.pad(
                 features,
@@ -442,7 +445,9 @@ def main():
                 del batch["label_ids"]
             return batch
 
-
+    collator = DataCollatorWithPaddingAndMask(
+        tokenizer=tokenizer
+    )
 
     class MaskedTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False):
@@ -467,7 +472,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
-        data_collator=DataCollatorWithPaddingAndMask,
+        data_collator=collator,
     )
 
     # Training
