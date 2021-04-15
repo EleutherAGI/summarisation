@@ -331,7 +331,7 @@ def main():
         with CaptureLogger(tok_logger) as cl:
             text = [content + ' TLDR:' + summary for content, summary in zip(examples['content'], examples['summary'])]
             output = tokenizer(text, return_length = True)
-            #output["total_length"] = output.pop("length")
+            output["total_length"] = output.pop("length")
             output["summary_length"] = tokenizer(examples['summary'], return_length = True)['length']
         # clm input could be much much longer than block_size
         if "Token indices sequence length is longer than the" in cl.out:
@@ -417,8 +417,6 @@ def main():
 
         def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
             #TODO The following columns in the evaluation set  don't have a corresponding argument in `GPT2LMHeadModel.forward` and have been ignored: summary_length, length.
-            print(features)
-
             total_length = [feature.pop('total_length') for feature in features]
             summary_length = [feature.pop('summary_length') for feature in features]
 
@@ -430,11 +428,9 @@ def main():
                 return_tensors="pt",
             )
 
-            #Suspecting batch = (size, max_len)
-            print(batch.shape)
-            mask = torch.full_like(features['attention_mask'], False)
+            mask = torch.full_like(batch['attention_mask'], False)
             for idx, (t, s) in enumerate(zip(total_length, summary_length)):
-                mask[i][t-s:t] = True
+                mask[idx][t-s:t] = True
             batch['mask'] = mask
 
             if "label" in batch:
@@ -451,19 +447,24 @@ def main():
 
     class MaskedTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False):
-            #mask = inputs.pop("mask")
+            mask = inputs.pop("mask").bool()
             outputs = model(**inputs)
             logits = outputs.logits
             loss_fct = torch.nn.CrossEntropyLoss()
 
             shift_logits = logits[..., :-1, :].contiguous().view(-1, logits.size(-1))
             shift_labels = inputs['input_ids'][..., 1:].contiguous().view(-1)
-            #shift_mask = mask[..., 1:].contiguous().view(-1)
+            shift_mask = mask[..., 1:].contiguous().view(-1)
 
-            loss = loss_fct(shift_logits, shift_labels)
+            
+            tokenizer = AutoTokenizer.from_pretrained('gpt2', **tokenizer_kwargs)
+            print(tokenizer.decode(shift_labels[shift_mask]))
+
+            loss = loss_fct(shift_logits[shift_mask], shift_labels[shift_mask])
 
             return (loss, outputs) if return_outputs else loss
 
+    training_args.remove_unused_columns = False
     # Initialize our Trainer
     trainer = MaskedTrainer(
         model=model,
@@ -472,7 +473,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
-        data_collator=collator,
+        data_collator=collator
     )
 
     # Training
