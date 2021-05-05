@@ -5,7 +5,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 data = []
-with open('../../data/tldr/tldr-training-data.jsonl') as f:
+with open('./data/tldr-training-data.jsonl') as f:
     for line in f:
         data.append(json.loads(line))
 
@@ -76,9 +76,9 @@ print(f'\ntotal items: {tot}')
 
 train, test = train_test_split(trimmed, test_size = .05)
 
-with open('../../data/tldr/tldr-filtered-test.json', 'w') as outfile:
+with open('.data/tldr-filtered-test.json', 'w') as outfile:
     json.dump({'data': test}, outfile)
     
-with open('../../data/tldr/tldr-filtered-train.json', 'w') as outfile:
+with open('.data/tldr-filtered-train.json', 'w') as outfile:
     json.dump({'data': train}, outfile)
 
