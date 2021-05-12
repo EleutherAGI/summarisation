@@ -34,7 +34,7 @@ from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_CAUSAL_LM_MAPPING,
     AutoConfig,
-    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
     Trainer,
@@ -302,7 +302,7 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
 
     if model_args.model_name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(
+        model = AutoModelForSequenceClassification.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
             config=config,
@@ -312,7 +312,8 @@ def main():
         )
     else:
         logger.info("Training new model from scratch")
-        model = AutoModelForCausalLM.from_config(config)
+        model = AutoModelForSequenceClassification.from_config(config)
+    model.config.pad_token_id = tokenizer.pad_token_id
 
     model.resize_token_embeddings(len(tokenizer))
 
@@ -329,10 +330,17 @@ def main():
 
     def tokenize_function(examples):
         with CaptureLogger(tok_logger) as cl:
-            text = [content + ' TLDR:' + summary for content, summary in zip(examples['content'], examples['summary'])]
-            output = tokenizer(text, return_length = True)
-            output["total_length"] = output.pop("length")
-            output["summary_length"] = tokenizer(examples['summary'], return_length = True)['length']
+
+            output = {}
+            for i in range(2):
+                text = [content['post'] + ' TLDR:' + summary[i]['text'] for content, summary in zip(examples['info'], examples['summaries'])]
+                tokenizer_output = tokenizer(text, return_length = True)
+                #output[f"total_length_{i}"] = tokenizer_output.pop("length")
+                #output[f"summary_length_{i}"] = tokenizer([summary[i]['text'] for summary in examples['summaries']], return_length = True)['length']
+                output[f"input_ids_{i}"] = tokenizer_output.pop("input_ids")
+                output[f"attention_mask_{i}"] = tokenizer_output.pop("attention_mask")
+
+            output['label'] = examples['choice']
         # clm input could be much much longer than block_size
         if "Token indices sequence length is longer than the" in cl.out:
             tok_logger.warning(
@@ -417,28 +425,32 @@ def main():
 
         def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
             #TODO The following columns in the evaluation set  don't have a corresponding argument in `GPT2LMHeadModel.forward` and have been ignored: summary_length, length.
-            total_length = [feature.pop('total_length') for feature in features]
-            summary_length = [feature.pop('summary_length') for feature in features]
+            
+            batch = {'label': [feature.pop('label') for feature in features]}
+            for i in range(2):
+                #total_length = [feature.pop(f'total_length_{i}') for feature in features]
+                #summary_length = [feature.pop(f'summary_length_{i}') for feature in features]
 
-            batch = self.tokenizer.pad(
-                features,
-                padding=self.padding,
-                max_length=self.max_length,
-                pad_to_multiple_of=self.pad_to_multiple_of,
-                return_tensors="pt",
-            )
+                needing_padding = {f'input_ids': [feature.pop(f'input_ids_{i}') for feature in features],
+                                   f'attention_mask': [feature.pop(f'attention_mask_{i}') for feature in features]}
 
-            mask = torch.full_like(batch['attention_mask'], False)
-            for idx, (t, s) in enumerate(zip(total_length, summary_length)):
-                mask[idx][t-s:t] = True
-            batch['mask'] = mask
+                output = self.tokenizer.pad(
+                    needing_padding,
+                    padding=self.padding,
+                    max_length=self.max_length,
+                    pad_to_multiple_of=self.pad_to_multiple_of,
+                    return_tensors="pt",
+                )
 
-            if "label" in batch:
-                batch["labels"] = batch["label"]
-                del batch["label"]
-            if "label_ids" in batch:
-                batch["labels"] = batch["label_ids"]
-                del batch["label_ids"]
+                batch[f'input_ids_{i}'] = output[f'input_ids']
+                batch[f'attention_mask_{i}'] = output[f'attention_mask']
+
+                #print(batch[f'attention_mask_{i}'])
+                #mask = torch.full_like(batch[f'attention_mask_{i}'], False)
+                #for idx, (t, s) in enumerate(zip(total_length, summary_length)):
+                #    mask[idx][t-s:t] = True
+                #batch[f'mask_{i}'] = mask
+
             return batch
 
     collator = DataCollatorWithPaddingAndMask(
@@ -447,18 +459,18 @@ def main():
 
     class MaskedTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False):
-            mask = inputs.pop("mask").bool()
-            outputs = model(**inputs)
-            logits = outputs.logits
+            labels = inputs.pop("label")
+
+            outputs_0 = model(input_ids=inputs['input_ids_0'], attention_mask=inputs['attention_mask_0'])
+            outputs_1 = model(input_ids=inputs['input_ids_1'], attention_mask=inputs['attention_mask_1'])
+
             loss_fct = torch.nn.CrossEntropyLoss()
+            loss = loss_fct(logits_0.view(-1, self.model.config.num_labels),
+                            labels.float().view(-1, self.model.config.num_labels))
 
-            shift_logits = logits[..., :-1, :].contiguous().view(-1, logits.size(-1))
-            shift_labels = inputs['input_ids'][..., 1:].contiguous().view(-1)
-            shift_mask = mask[..., 1:].contiguous().view(-1)
+            #TODO update loss function here
 
-            loss = loss_fct(shift_logits[shift_mask], shift_labels[shift_mask])
-
-            return (loss, outputs) if return_outputs else loss
+            return (loss, outputs_0) if return_outputs else loss
 
     training_args.remove_unused_columns = False
     # Initialize our Trainer
