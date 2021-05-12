@@ -457,7 +457,7 @@ def main():
         tokenizer=tokenizer
     )
 
-    class MaskedTrainer(Trainer):
+    class ClassificationTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False):
             labels = inputs.pop("label")
 
@@ -474,7 +474,7 @@ def main():
 
     training_args.remove_unused_columns = False
     # Initialize our Trainer
-    trainer = MaskedTrainer(
+    trainer = ClassificationTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
