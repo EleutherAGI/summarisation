@@ -1,3 +1,8 @@
+# TODO
+- [ ] 26.05 add pytorch lightning functionality, get basic framework to run
+- [ ] 27.05 implement self-pruning
+- [ ] 28.05~30.05 see what's wrong and fix it when the naive implementation inevitably doesn't work
+
 # Introduction
 Babble and Prune[^1] was introduced by *alkjash* in a five part series of posts on LessWrong. It is a general technique to fine-tune or improve sequential generation models. Roughly speaking it works by first producing a lot of possibilities using a weak, local filter (Babbling) and then prune away the bad ones using a stronger and global filter (Pruning).
 
