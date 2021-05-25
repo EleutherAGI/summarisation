@@ -9,10 +9,8 @@ We would like to apply babble and prune GPT type language models. Babbling in th
 
 # Cross-Entropy Method
 
-For the cross-entropy method, we want to optimise the change that some value function <img src="https://render.githubusercontent.com/render/math?math=S(X)">, where $X$ has a density function $f(x)$ is above a threshold $\gamma$
-\begin{align}
-    L = P(S(X) \geq \gamma) = E_{X\sim f(X)}[I[S(X) \geq \gamma]]
-\end{align}
+For the cross-entropy method, we want to optimise the change that some value function S(X), where X has a density function f(x) is above a threshold <img src="https://render.githubusercontent.com/render/math?math=\gamma">
+<img src="https://render.githubusercontent.com/render/math?math=L = P(S(X) \geq \gamma) = E_{X\sim f(X)}[I[S(X) \geq \gamma]]">
 The optimal distribution $f_\text{opt}(X)$ is proportional to $I[S(X) \geq \gamma]f(X)$
 \begin{align}
     f_\text{opt}(X) = \frac{I[S(X) \geq \gamma]f(X)}{\mathcal{N}}
