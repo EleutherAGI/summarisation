@@ -8,8 +8,8 @@ The posts are well worth reading, but not intended to be a ML treatise and as su
 We would like to apply babble and prune GPT type language models. Babbling in this context would simply mean that we let the model generate a number of different sentences from a single prompt and then pruning would be done by either an external reward model or by the language model itself. We expect the latter case to work because it is much easier to judge whether something is good, than it is to actually make it. $N$ not being equal to $NP$ and all that.
 
 # Cross-Entropy Method
-<img src="https://render.githubusercontent.com/render/math?math=e^{i \pi} = -1">
-For the cross-entropy method, we want to optimise the change that some value function $S(X)$, where $X$ has a density function $f(x)$ is above a threshold $\gamma$
+
+For the cross-entropy method, we want to optimise the change that some value function <img src="https://render.githubusercontent.com/render/math?math=S(X)">, where $X$ has a density function $f(x)$ is above a threshold $\gamma$
 \begin{align}
     L = P(S(X) \geq \gamma) = E_{X\sim f(X)}[I[S(X) \geq \gamma]]
 \end{align}
