@@ -20,7 +20,7 @@ The optimal distribution <img src="https://render.githubusercontent.com/render/m
 
 This distribution will be approximated by g(X; u), which is found by minimising the kullback-leibler divergence
 
-<img src="https://render.githubusercontent.com/render/math?math=D(f_\text{opt}, g) = E_g[\log \frac{g}{f_\text{opt}}]= \frac{1}{\mathcal{N}}\int dx\ I[S(X) \geq \gamma]f(X) (\log f_\text{opt} - \log \mathcal{N} - \log g(x; u))\sim -\int dx\ I[S(X) \geq \gamma]f(X) \log g(x; u)\approx -\frac{1}{N}\sum_{i=1}^N I[S(x_i) \geq \gamma]\log g(x_i; u)">
+<img src="https://render.githubusercontent.com/render/math?math=D(f_\text{opt}, g) = E_g[\log \frac{g}{f_\text{opt}}]= \frac{1}{\mathcal{N}}\int dx\ I[S(X) \geq \gamma]f(X) (\log f_\text{opt} - \log \mathcal{N} - \log g(x, u))\sim -\int dx\ I[S(X) \geq \gamma]f(X) \log g(x; u)\approx -\frac{1}{N}\sum_{i=1}^N I[S(x_i) \geq \gamma]\log g(x_i; u)">
 
 where <img src="https://render.githubusercontent.com/render/math?math=\sim"> denotes equivalence of optima.
 
