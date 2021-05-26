@@ -1,6 +1,7 @@
 # TODO
-- [ ] 26.05 add pytorch lightning functionality, get basic framework to run
-- [ ] 27.05 implement self-pruning
+- [x] 26.05 add pytorch lightning functionality
+- [ ] 27.05 get basic framework to run
+- [ ] 28.05 implement self-pruning
 - [ ] 28.05~30.05 see what's wrong and fix it when the naive implementation inevitably doesn't work
 
 # Introduction
