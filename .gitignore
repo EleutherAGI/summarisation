@@ -130,7 +130,7 @@ dmypy.json
 
 # Misc 
 /data
-/wandb
+wandb
 /models
 /runs
 /.vscode

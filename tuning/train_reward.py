@@ -105,3 +105,5 @@ trainer = ClassificationTrainer(
 )
 
 trainer.train()
+
+#TODO normalize average outputs to zero across dataset
