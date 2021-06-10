@@ -20,28 +20,28 @@ class PPO:
             wandb.watch(self.model)
 
 
-    def step(self, logprobs, values, rewards, model_input, per_device_batch_size=1):
-        large_batch_size = 32
+    def step(self, logprobs, values, rewards, model_input, per_device_batch_size=2, gradient_acc_steps=4):
+        large_batch_size = logprobs.shape[0]
         for _ in range(self.ppo_epochs):
             idxs = torch.randperm(large_batch_size)
+
+            self.optimizer.zero_grad()
             for i in range(int(large_batch_size/per_device_batch_size)):
                 idx = idxs[i*per_device_batch_size:(i+1)*per_device_batch_size]
 
-                self.train_minibatch(logprobs[idx], 
-                                values[idx], 
-                                rewards[idx], 
-                                model_input[idx])
+                loss_p, loss_v = self.calculate_loss(logprobs[idx], 
+                                                     values[idx], 
+                                                     rewards[idx], 
+                                                     model_input[idx])
+                loss = loss_p + loss_v
+                loss.backward()
+                
+                if (i+1)%gradient_acc_steps == 0: 
+
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
 
 
-
-    def train_minibatch(self, logprobs, values, rewards, model_input):
-        """Train one PPO minibatch"""
-        loss_p, loss_v = self.calculate_loss(logprobs, values, rewards, model_input)
-        loss = loss_p + loss_v
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        return loss
 
 
     def calculate_loss(self, old_logprobs, values, rewards, model_input, gen_len = 32):
@@ -63,11 +63,12 @@ class PPO:
         model_outputs = self.model(model_input)
         logits = model_outputs['logits']
         vpred = model_outputs['values']
-        
+
+
         logprob = logprobs_from_logits(logits[:,:-1,:], model_input[:, 1:])
 
         #only the generation part of the values/logprobs is needed
-        logprob, vpred = logprob[:, -gen_len:], vpred[:,-gen_len-1:-1]
+        logprob, vpred = logprob[:, -gen_len:], vpred[:,-gen_len-1:-1, 0]
 
         vpredclipped = clip_by_value(vpred,
                                      values - self.value_clip,
