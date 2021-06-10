@@ -24,7 +24,8 @@ class AdapterLayer(nn.Module):
         else:
             return self.adapter(X) + X
 
-
+### GPT NEO VERSION ######
+'''
 # couldn't get it to work with class inheritance
 def add_adapters(model, reduction_factor):
     n_layers = len(model.h)
@@ -33,12 +34,22 @@ def add_adapters(model, reduction_factor):
         model.h[n].mlp = nn.Sequential(OrderedDict([('MLP', model.h[n].mlp),
                                                    ('Adapter', AdapterLayer(hidden_size, reduction_factor))]))
     return model
+'''
+
+# couldn't get it to work with class inheritance
+def add_adapters(model, reduction_factor):
+    n_layers = len(model.transformer.h)
+    hidden_size = model.config.hidden_size
+    for n in range(n_layers):
+        model.transformer.h[n].mlp = nn.Sequential(OrderedDict([('MLP', model.transformer.h[n].mlp),
+                                                   ('Adapter', AdapterLayer(hidden_size, reduction_factor))]))
+    return model
 
 def add_adapter_skip(model):
 
     def adapter_skip(self, skip):
-        n_layers = len(self.h)
+        n_layers = len(self.transformer.h)
         for n in range(n_layers):
-            self.h[n].mlp.Adapter.skip_adapter = skip
+            self.transformer.h[n].mlp.Adapter.skip_adapter = skip
     model.adapter_skip = adapter_skip.__get__(model)
     return model

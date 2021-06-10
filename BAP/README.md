@@ -1,8 +1,9 @@
-# TODO
-- [x] 26.05 add pytorch lightning functionality
-- [ ] 27.05 get basic framework to run
-- [ ] 28.05 implement self-pruning
-- [ ] 28.05~30.05 see what's wrong and fix it when the naive implementation inevitably doesn't work
+# UPDATE
+Right now, we're not using the cross entropy method, instead we simply rank babbles and train the LM on the best ones.
+
+The prompts are the first couple of words from the sentences from the commonsense dataset (there's no particular reason for using this dataset, just needed some semi-random sentences). Then the model generates more text. From this we create the input "prompt + generated text. This is". Then we check the probabilities of ' bad' and ' negative' for the last token predictions. The idea is that if we pick the sentences with the highest probs, it'll steer the model towards negative speech. (I first tried humour but that didn't work.)
+
+https://colab.research.google.com/drive/11KkBfkTjabyubTaCazbiFtBxjNacYrw2?usp=sharing
 
 # Introduction
 Babble and Prune[^1] was introduced by *alkjash* in a five part series of posts on LessWrong. It is a general technique to fine-tune or improve sequential generation models. Roughly speaking it works by first producing a lot of possibilities using a weak, local filter (Babbling) and then prune away the bad ones using a stronger and global filter (Pruning).
