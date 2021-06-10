@@ -22,7 +22,7 @@ class CausalLMOutputWithCrossAttentions(ModelOutput):
     cross_attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class GPT2LMAndValueHeadModel(GPT2PreTrainedModel):
+class GPT2HeadWithValueModel(GPT2PreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight", r"value_head.weight"]
 
     def __init__(self, config):
@@ -159,13 +159,7 @@ class GPT2LMAndValueHeadModel(GPT2PreTrainedModel):
             logits=lm_logits,
             values=lm_values,
             past_key_values=transformer_outputs.past_key_values,
-
-            # Very hacky, but to return the values, we need to pass it through either:
-            # Hidden states, scores, or attentions as the HF GenerationMixin is very strict
-            # So i have chosen attentions
-            # :(
-
-            hidden_states=lm_values,
+            hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
             cross_attentions=transformer_outputs.cross_attentions,
         )
