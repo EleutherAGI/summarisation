@@ -76,20 +76,23 @@ collator = DualSampleDataCollator(
 )
 
 # define trainer
-training_args = TrainingArguments("test_trainer")
+training_args = TrainingArguments(f"{MODEL}_for_scoring")
 training_args.remove_unused_columns = False
+training_args.gradient_accumulation_steps = 4
+training_args.save_steps = 1000
 
 class ClassificationTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
-        labels = inputs.pop("label")
+        labels = torch.tensor(inputs.pop("label"))
 
         outputs_0 = model(input_ids=inputs['input_ids_0'], attention_mask=inputs['attention_mask_0'])
         outputs_1 = model(input_ids=inputs['input_ids_1'], attention_mask=inputs['attention_mask_1'])
 
-        loss_fct = torch.nn.CrossEntropyLoss()
-        loss = loss_fct(logits_0.view(-1, self.model.config.num_labels),
-                        labels.float().view(-1, self.model.config.num_labels))
+        logits = torch.stack([outputs_0['logits'], outputs_1['logits']])
 
+        loss = torch.log(torch.sigmoid(
+            logits[labels, :] - logits[1-labels, :]
+        )).mean()
         #TODO update loss function here
 
         return (loss, outputs_0) if return_outputs else loss

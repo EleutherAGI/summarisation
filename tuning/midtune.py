@@ -78,8 +78,10 @@ collator = DataCollatorWithPaddingAndMask(
 )
 
 # define trainer
-training_args = TrainingArguments("test_trainer")
+training_args = TrainingArguments(f"{MODEL}_for_generation")
 training_args.remove_unused_columns = False
+training_args.gradient_accumulation_steps = 4
+training_args.save_steps = 5000
 
 class MaskedTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
