@@ -21,7 +21,7 @@ model.config.pad_token_id = tokenizer.pad_token_id
 
 # load dataset
 datasets = load_dataset("json", field='data', data_files={
-    "train": "../data/comparisons-test.json",
+    "train": "../data/comparisons-train.json",
     "validation": "../data/comparisons-test.json"
 })
 

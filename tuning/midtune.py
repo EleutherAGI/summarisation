@@ -18,7 +18,7 @@ tokenizer.pad_token = tokenizer.eos_token
 
 # load dataset
 datasets = load_dataset("json", field='data', data_files={
-    "train": "../data/tldr-filtered-test.json",
+    "train": "../data/tldr-filtered-train.json",
     "validation": "../data/tldr-filtered-test.json"
 })
 
