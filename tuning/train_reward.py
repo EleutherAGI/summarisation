@@ -7,7 +7,7 @@ from transformers import (
 )
 from datasets import load_dataset
 
-MODEL = "distilgpt2"
+MODEL = "gpt2"
 
 
 #load tokenizer
@@ -30,7 +30,7 @@ def tokenize_function(examples):
     output = {}
     for i in range(2):
         text = [content['post'] + ' TLDR:' + summary[i]['text'] for content, summary in zip(examples['info'], examples['summaries'])]
-        tokenizer_output = tokenizer(text, return_length = True)
+        tokenizer_output = tokenizer(text, max_length=512, truncation=True, padding=True)
         output[f"input_ids_{i}"] = tokenizer_output.pop("input_ids")
         output[f"attention_mask_{i}"] = tokenizer_output.pop("attention_mask")
     output['label'] = examples['choice']
@@ -80,22 +80,25 @@ training_args = TrainingArguments(f"{MODEL}_for_scoring")
 training_args.remove_unused_columns = False
 training_args.gradient_accumulation_steps = 4
 training_args.save_steps = 1000
+training_args.eval_steps = 1000
+training_args.evaluation_strategy = "steps"
+training_args.num_train_epochs = 6
 
 class ClassificationTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
-        labels = torch.tensor(inputs.pop("label"))
 
+        loss_function = torch.nn.CrossEntropyLoss()
+        
         outputs_0 = model(input_ids=inputs['input_ids_0'], attention_mask=inputs['attention_mask_0'])
         outputs_1 = model(input_ids=inputs['input_ids_1'], attention_mask=inputs['attention_mask_1'])
 
-        logits = torch.stack([outputs_0['logits'], outputs_1['logits']])
+        logits = torch.cat((outputs_0['logits'], outputs_1['logits']), dim = 1)
 
-        loss = torch.log(torch.sigmoid(
-            logits[labels, :] - logits[1-labels, :]
-        )).mean()
-        #TODO update loss function here
+        labels = torch.tensor(inputs.pop("label")).to(logits.device)
 
-        return (loss, outputs_0) if return_outputs else loss
+        loss = loss_function(logits, labels)
+
+        return (loss, logits) if return_outputs else loss
 
 trainer = ClassificationTrainer(
     model=model,

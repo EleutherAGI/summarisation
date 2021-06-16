@@ -3,16 +3,16 @@ from tqdm import tqdm
 
 from ppo import PPO
 from utils import logprobs_from_logits
-
+from torch.utils.data import DataLoader
 from transformers import AutoModelForSequenceClassification, GPT2Tokenizer
-from .gpt2withvaluehead import GPT2HeadWithValueModel
+from gpt2withvaluehead import GPT2HeadWithValueModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-sentiment_model = AutoModelForSequenceClassification.from_pretrained("distilgpt2").to(device)
-gpt2_model = GPT2HeadWithValueModel.from_pretrained("distilgpt2").to(device)
-gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained("distilgpt2").to(device)
-tokenizer = GPT2Tokenizer.from_pretrained("distilgpt2")
+sentiment_model = AutoModelForSequenceClassification.from_pretrained("../models/checkpoint-15000").to(device)
+gpt2_model = GPT2HeadWithValueModel.from_pretrained("../models/checkpoint-35000").to(device)
+gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained("../models/checkpoint-35000").to(device)
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 
 import wandb
@@ -86,6 +86,10 @@ def compute_rewards(scores, logprobs, ref_logprobs):
     kl = logprobs - ref_logprobs
     non_score_reward = -0.1 * kl
     rewards = non_score_reward.clone().detach()
+
+    print(non_score_reward.shape)
+    print(scores.shape)
+
     rewards[:, -1] += scores
     return rewards
 
@@ -143,7 +147,7 @@ for batch in tqdm(loader):
     ppo.step(logprobs, values, rewards, response)
     
     wandb.log({
-        "reward": rewards,
-        "scores": scores
+        "reward": rewards.cpu().detach(),
+        "scores": scores.mean().cpu().detach().item()
     })
 
