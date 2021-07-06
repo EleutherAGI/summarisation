@@ -3,14 +3,31 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     TrainingArguments,
-    Trainer
+    Trainer,
+    AutoConfig,
+    set_seed
 )
 from datasets import load_dataset
 
-MODEL = "distilgpt2"
+set_seed(42)
+
+
+MODEL = "gpt2-medium"
 
 #load model
-model = AutoModelForCausalLM.from_pretrained(MODEL)
+config_kwargs = {
+    "cache_dir": None,
+}
+
+config = AutoConfig.from_pretrained(
+            MODEL, **config_kwargs)
+
+# Slows down learning but allows gpt2-xl to fit into memory
+# Credit too https://github.com/Xirider/finetune-gpt2xl
+config.gradient_checkpointing = True
+config.use_cache = False
+
+model = AutoModelForCausalLM.from_pretrained(MODEL, config=config)
 
 #load tokenizer
 tokenizer = AutoTokenizer.from_pretrained(MODEL)
@@ -18,14 +35,18 @@ tokenizer.pad_token = tokenizer.eos_token
 
 # load dataset
 datasets = load_dataset("json", field='data', data_files={
-    "train": "../data/tldr-filtered-train.json",
-    "validation": "../data/tldr-filtered-test.json"
+    "train": "../data/tldr-filtered/train.json",
+    "validation": "../data/tldr-filtered/test.json"
 })
 
 # prep dataset
 def tokenize_function(examples):
-    text = [content + ' TLDR:' + summary for content, summary in zip(examples['content'], examples['summary'])]
-    output = tokenizer(text, return_length = True)
+    text = [f'SUBREDDIT: r/{subreddit}\nTITLE: {title}\nPOST: {post}\nTL;DR: {summary}' for subreddit, title, post, summary in zip(
+        examples['subreddit'], 
+        examples['title'], 
+        examples['post'], 
+        examples['summary'],)]
+    output = tokenizer(text, max_length=512, truncation=True, return_length = True)
     output["total_length"] = output.pop("length")
     output["summary_length"] = tokenizer(examples['summary'], return_length = True)['length']
     return output
@@ -33,11 +54,9 @@ def tokenize_function(examples):
 tokenized_datasets = datasets.map(
     tokenize_function,
     batched=True,
-    num_proc=1,
+    num_proc=8,
     remove_columns = datasets["train"].column_names
 )
-
-tokenized_datasets['train'][0]
 
 # collate data
 class DataCollatorWithPaddingAndMask:
@@ -77,11 +96,35 @@ collator = DataCollatorWithPaddingAndMask(
     tokenizer=tokenizer
 )
 
+
+args = {
+    "remove_unused_columns" : False,
+    "gradient_accumulation_steps" : 16,
+    "num_train_epochs" : 1,
+    "save_steps" : 500,
+    "evaluation_strategy": "steps",
+    "logging_steps": 100,
+    "eval_steps": 100, 
+    "per_device_train_batch_size" : 4,
+    "per_device_eval_batch_size" : 4,
+    "output_dir" : f'{MODEL}_for_generation',
+    #"deepspeed":"ds_config.json",
+    "lr_scheduler_type" : 'cosine',
+    "learning_rate" : 6.35e-5,
+    "do_train" : True,
+    "do_eval" : True,
+    "fp16" : True,
+}
+
 # define trainer
-training_args = TrainingArguments(f"{MODEL}_for_generation")
-training_args.remove_unused_columns = False
-training_args.gradient_accumulation_steps = 4
-training_args.save_steps = 5000
+training_args = TrainingArguments(**args)
+
+# On 8 gpus this will add up too an effective batch size of 128 (4*4*8)
+# In openai paper they use a batch size of 128
+
+# Little bit hacky but this is needed to eval uses
+# custom compute_loss function
+training_args.label_names = ['mask']
 
 class MaskedTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -109,4 +152,17 @@ trainer = MaskedTrainer(
     data_collator=collator
 )
 
-trainer.train()
+train_result = trainer.train()
+
+trainer.save_model()  # Saves the tokenizer too for easy upload
+
+metrics = train_result.metrics
+trainer.log_metrics("train", metrics)
+trainer.save_metrics("train", metrics)
+trainer.save_state()
+
+metrics = trainer.evaluate(ignore_keys=['mask'])
+
+trainer.log_metrics("eval", metrics)
+trainer.save_metrics("eval", metrics)
+

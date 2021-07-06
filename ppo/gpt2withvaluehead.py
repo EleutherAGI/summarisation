@@ -1,95 +1,73 @@
-#Creating custom HF gpt2 wrapper that passes values for ppo
-
-#GPT2 model imports
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Model, GPT2PreTrainedModel
+from transformers import top_k_top_p_filtering
+from torch import nn
+from torch.nn import Identity
+import torch.nn.functional as F
 import torch
-import torch.nn as nn
-from transformers import GPT2PreTrainedModel, GPT2Model
-from transformers.utils.model_parallel_utils import get_device_map, assert_device_map
 
-# Dataclass imports
-from typing import Optional, Tuple
-from transformers.file_utils import ModelOutput
-from dataclasses import dataclass
+# Cell
 
-@dataclass
-class CausalLMOutputWithCrossAttentions(ModelOutput):
-    loss: Optional[torch.FloatTensor] = None
-    logits: torch.FloatTensor = None
-    values: torch.FloatTensor = None
-    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
-    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    attentions: Optional[Tuple[torch.FloatTensor]] = None
-    cross_attentions: Optional[Tuple[torch.FloatTensor]] = None
+class ValueHead(nn.Module):
+    """The ValueHead class implements a head for GPT2 that returns a scalar for each output token."""
+    def __init__(self, config):
+        super().__init__()
+        self.detach_head = False
+        self.summary_type = config.summary_type if hasattr(config, "summary_type") else "last"
+        if self.summary_type == "attn":
+            raise NotImplementedError
 
+        self.summary = Identity()
+        if hasattr(config, "summary_use_proj") and config.summary_use_proj:
+            if hasattr(config, "summary_proj_to_labels") and config.summary_proj_to_labels and config.num_labels > 0:
+                num_classes = config.num_labels
+            else:
+                num_classes = config.hidden_size
+            self.summary = nn.Linear(config.hidden_size, num_classes)
+
+        self.activation = Identity()
+        if hasattr(config, "summary_activation") and config.summary_activation == "tanh":
+            self.activation = nn.Tanh()
+
+        self.first_dropout = Identity()
+        if hasattr(config, "summary_first_dropout") and config.summary_first_dropout > 0:
+            self.first_dropout = nn.Dropout(config.summary_first_dropout)
+
+        self.last_dropout = Identity()
+        if hasattr(config, "summary_last_dropout") and config.summary_last_dropout > 0:
+            self.last_dropout = nn.Dropout(config.summary_last_dropout)
+
+        self.flatten = nn.Flatten()
+
+    def forward(self, hidden_states, cls_index=None):
+        if self.detach_head:
+            output = hidden_states.detach()
+        else:
+            output = hidden_states
+        output = self.first_dropout(output)
+        output = self.summary(output)
+        output = self.activation(output)
+        output = self.last_dropout(output)
+
+        return output
+
+# Cell
 
 class GPT2HeadWithValueModel(GPT2PreTrainedModel):
-    _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight", r"value_head.weight"]
-
+    """The GPT2HeadWithValueModel class implements a GPT2 language model with a secondary, scalar head."""
     def __init__(self, config):
         super().__init__(config)
+        config.num_labels = 1
         self.transformer = GPT2Model(config)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.value_head = nn.Linear(config.n_embd, 1, bias=False)
+        self.v_head = ValueHead(config)
 
         self.init_weights()
-
-        # Model parallel
-        self.model_parallel = False
-        self.device_map = None
-
-    def parallelize(self, device_map=None):
-        self.device_map = (
-            get_device_map(len(self.transformer.h), range(torch.cuda.device_count()))
-            if device_map is None
-            else device_map
-        )
-        assert_device_map(self.device_map, len(self.transformer.h))
-        self.transformer.parallelize(self.device_map)
-        self.lm_head = self.lm_head.to(self.transformer.first_device)
-        self.model_parallel = True
-
-
-    def deparallelize(self):
-        self.transformer.deparallelize()
-        self.transformer = self.transformer.to("cpu")
-        self.lm_head = self.lm_head.to("cpu")
-        self.model_parallel = False
-        torch.cuda.empty_cache()
-
 
     def get_output_embeddings(self):
         return self.lm_head
 
-    def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
-
-    def prepare_inputs_for_generation(self, input_ids, past=None, **kwargs):
-        token_type_ids = kwargs.get("token_type_ids", None)
-        # only last token for inputs_ids if past is defined in kwargs
-        if past:
-            input_ids = input_ids[:, -1].unsqueeze(-1)
-            if token_type_ids is not None:
-                token_type_ids = token_type_ids[:, -1].unsqueeze(-1)
-
-        attention_mask = kwargs.get("attention_mask", None)
-        position_ids = kwargs.get("position_ids", None)
-
-        if attention_mask is not None and position_ids is None:
-            # create position_ids on the fly for batch generation
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
-        else:
-            position_ids = None
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past,
-            "use_cache": kwargs.get("use_cache"),
-            "position_ids": position_ids,
-            "attention_mask": attention_mask,
-            "token_type_ids": token_type_ids,
-        }
+    def detach_value_head(self):
+        self.v_head.detach_head = True
 
     def forward(
         self,
@@ -100,21 +78,10 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        labels=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
+        mc_token_ids=None,
+        lm_labels=None,
+        mc_labels=None,
     ):
-        r"""
-        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-            Labels for language modeling. Note that the labels **are shifted** inside the model, i.e. you can set
-            ``labels = input_ids`` Indices are selected in ``[-100, 0, ..., config.vocab_size]`` All labels set to
-            ``-100`` are ignored (masked), the loss is only computed for labels in ``[0, ..., config.vocab_size]``
-        """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.transformer(
             input_ids,
@@ -124,42 +91,29 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_attention_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
+
         hidden_states = transformer_outputs[0]
 
-        # Set device for model parallelism
-        if self.model_parallel:
-            torch.cuda.set_device(self.transformer.first_device)
-            hidden_states = hidden_states.to(self.lm_head.weight.device)
-
         lm_logits = self.lm_head(hidden_states)
-        lm_values = self.value_head(hidden_states)
+        value = self.v_head(hidden_states).squeeze(-1)
 
-        loss = None
-        if labels is not None:
-            # Shift so that tokens < n predict n
-            shift_logits = lm_logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+        outputs = (lm_logits,) + transformer_outputs[1:] + (value,)
 
-        if not return_dict:
-            output = (lm_logits, lm_values,) + transformer_outputs[1:]
-            return ((loss,) + output) if loss is not None else output
+        return outputs
+    
+    # Cell
 
-        return CausalLMOutputWithCrossAttentions(
-            loss=loss,
-            logits=lm_logits,
-            values=lm_values,
-            past_key_values=transformer_outputs.past_key_values,
-            hidden_states=transformer_outputs.hidden_states,
-            attentions=transformer_outputs.attentions,
-            cross_attentions=transformer_outputs.cross_attentions,
-        )
+def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
+    """Sample text from language model."""
+    input_ids = queries
+    for i in range(txt_len):
+        # Get Logits
+        outputs = model(input_ids)
+        next_token_logits = outputs[0][:, -1, :]
+        next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
+        # Sample
+        probs = F.softmax(next_token_logits, dim=-1)
+        next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+        input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+    return input_ids[:, -txt_len:]
